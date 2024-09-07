@@ -399,7 +399,7 @@ class Timetable:
         """Create a timetable from data contained in a timetable file."""
 
         # Avoid circular imports
-        from tt_parser import TimetableParser
+        from .tt_parser import TimetableParser
 
         return TimetableParser(data).timetable
 
@@ -468,6 +468,20 @@ class CLI(_SettingsBase, _SettingsBase2):
     open: bool = False
 
     def __post_init__(self):
-        from __init__ import main
+        from . import real_main
 
-        main(self)
+        real_main(self)
+
+
+@dataclass
+class _SettingsBase3:
+    """Wrapper for the `timetable_files` setting."""
+
+    timetable_files: list[typer.FileText]
+
+
+@dataclass
+class WebSettings(_SettingsBase, _SettingsBase3):
+    """Web settings."""
+
+    output: str = "%(timetables)s.pdf"

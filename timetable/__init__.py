@@ -9,8 +9,8 @@ from fpdf import FPDF
 from fpdf.enums import Align, CharVPos, RenderStyle, StrokeCapStyle, XPos, YPos
 from fpdf.fonts import FontFace
 from fpdf.line_break import Fragment
-from tt_parser import TimetableParser
-from utils import CLI, Day, Hour, Lesson, Settings, Timetable, Week, app, range_any
+from .tt_parser import TimetableParser
+from .utils import CLI, Day, Hour, Lesson, Settings, Timetable, Week, app, range_any
 
 left_week = ContextVar("left_week", default="")
 right_week = ContextVar("right_week", default="")
@@ -21,6 +21,16 @@ class PatchedFPDF(FPDF):
     A `FPDF` class that can draw better cells and add superscripts when needed.
     Recommended for use with timetables.
     """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.set_auto_page_break(False, 10)
+        fonts_dir = Path("C:/Windows/Fonts") if sys.platform == "win32" else Path("/usr/share/fonts")
+        self.add_font("Montserrat", "", fonts_dir / "Montserrat-Regular.ttf")
+        self.add_font("Montserrat", "B", fonts_dir / "Montserrat-Bold.ttf")
+        self.add_font("Montserrat", "I", fonts_dir / "Montserrat-Italic.ttf")
+        self.add_font("Montserrat", "BI", fonts_dir / "Montserrat-BoldItalic.ttf")  # type: ignore
+        self.set_font("Montserrat")
 
     def cell(
         self, w: float | None = None, h: float | None = None, txt: str = "", *args, **kwargs
@@ -537,15 +547,8 @@ class TimetableRenderer:
 base_path = Path(__file__).parent
 
 
-def main(settings: CLI):
+def real_main(settings: CLI):
     pdf = PatchedFPDF("L")
-    pdf.set_auto_page_break(False, 10)
-    fonts_dir = Path("C:/Windows/Fonts") if sys.platform == "win32" else Path("/usr/share/fonts")
-    pdf.add_font("Montserrat", "", fonts_dir / "Montserrat-Regular.ttf")
-    pdf.add_font("Montserrat", "B", fonts_dir / "Montserrat-Bold.ttf")
-    pdf.add_font("Montserrat", "I", fonts_dir / "Montserrat-Italic.ttf")
-    pdf.add_font("Montserrat", "BI", fonts_dir / "Montserrat-BoldItalic.ttf")  # type: ignore
-    pdf.set_font("Montserrat")
 
     only_one_timetable = len(settings.timetable_paths) == 1
 
@@ -566,5 +569,9 @@ def main(settings: CLI):
         os.startfile(file)  # type: ignore
 
 
-if __name__ == "__main__":
+def main():
     app()
+
+
+if __name__ == "__main__":
+    main()

@@ -108,3 +108,9 @@ timetables/
 
 # output files
 *.pdf
+
+# web app remote URL
+webapp/.remote_url
+
+# external resources
+webapp/static/ext

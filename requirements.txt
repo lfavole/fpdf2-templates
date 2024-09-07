@@ -1,0 +1,4 @@
+flask ~= 3.0
+fpdf2 ~= 2.7
+minify-html ~= 0.15
+typer ~= 0.12

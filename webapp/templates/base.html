@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ title }}{% endblock title %}{{ " - " if title else "" }}PDF tools</title>
+    <link rel="stylesheet" href="/static/ext/matcha.min.css">
+</head>
+<body>
+    <h1>{{ self.title() or "PDF tools" }}</h1>
+{% block body %}{% endblock body %}
+    <footer>
+        <a href="{{ remote_url or "https://github.com/lfavole/pdf-tools" }}" target="_blank">Source code here</a>.
+    </footer>
+</body>
+</html>

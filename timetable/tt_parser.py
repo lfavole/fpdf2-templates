@@ -3,7 +3,7 @@ import re
 import warnings
 from pprint import pp
 
-from utils import Day, Hour, Lesson, Settings, Timetable, Week
+from .utils import Day, Hour, Lesson, Settings, Timetable, Week
 
 is_hr = re.compile(r"^---+$").match
 get_lesson = re.compile(
