@@ -1,0 +1,21 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"flake8.args": [
+			"--config",
+			".flake8"
+		],
+		"isort.args": [
+			"--settings-path",
+			"pyproject.toml"
+		],
+		"pylint.args": [
+			"--rcfile",
+			"pyproject.toml"
+		]
+	}
+}
