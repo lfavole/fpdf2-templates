@@ -9,6 +9,8 @@ from fpdf import FPDF
 from fpdf.enums import Align, CharVPos, RenderStyle, StrokeCapStyle, XPos, YPos
 from fpdf.fonts import FontFace
 from fpdf.line_break import Fragment
+
+from fonts import add_font
 from .tt_parser import TimetableParser
 from .utils import CLI, Day, Hour, Lesson, Settings, Timetable, Week, app, range_any
 
@@ -25,11 +27,7 @@ class PatchedFPDF(FPDF):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.set_auto_page_break(False, 10)
-        fonts_dir = Path("C:/Windows/Fonts") if sys.platform == "win32" else Path("/usr/share/fonts")
-        self.add_font("Montserrat", "", fonts_dir / "Montserrat-Regular.ttf")
-        self.add_font("Montserrat", "B", fonts_dir / "Montserrat-Bold.ttf")
-        self.add_font("Montserrat", "I", fonts_dir / "Montserrat-Italic.ttf")
-        self.add_font("Montserrat", "BI", fonts_dir / "Montserrat-BoldItalic.ttf")  # type: ignore
+        add_font(self, "Montserrat")
         self.set_font("Montserrat")
 
     def cell(
