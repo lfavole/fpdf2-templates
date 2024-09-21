@@ -63,7 +63,9 @@ def add_font(pdf: FPDF, font_name: str, font_style="all"):
                 "Bold": "B",
                 "Italic": "I",
                 "BoldItalic": "BI",
-            }[font_style],  # type: ignore
+            }[
+                font_style
+            ],  # type: ignore
             font_path,
         )
     else:

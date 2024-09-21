@@ -1,6 +1,5 @@
 import os
 import re
-import sys
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,7 +11,7 @@ from fpdf.line_break import Fragment
 
 from fonts import add_font
 from .tt_parser import TimetableParser
-from .utils import CLI, Day, Hour, Lesson, Settings, Timetable, Week, app, range_any
+from .utils import CLI, Day, Hour, Lesson, Pause, Pauses, PausesContainer, Settings, Timetable, Week, app, range_any
 
 left_week = ContextVar("left_week", default="")
 right_week = ContextVar("right_week", default="")
@@ -77,6 +76,7 @@ class HoursManager:
     """An object that manages the rendering of hours (at the left of the timetable)."""
 
     renderer: "TimetableRenderer"
+    _hours_width: float | None = field(default=None, init=False)
 
     def __post_init__(self):
         starts: list[Hour] = []
@@ -122,6 +122,14 @@ class HoursManager:
         ), "Attempt to use day_length on a timetable without hours"
         return self.end_hour - self.start_hour
 
+    @property
+    def width(self):
+        """The width of the hours column (at the left of the timetable)."""
+        if self.renderer.settings.hours_width:
+            return self.renderer.settings.hours_width
+        assert self._hours_width, "hours_width should have been filled"
+        return self._hours_width
+
     def render(self, interval: Hour | float = 1):
         """Render the hours (at the left of the timetable) with the given interval."""
         if self.start_hour is None or self.end_hour is None:
@@ -138,6 +146,9 @@ class HoursManager:
         if not hours:
             # Stop here because getting the start and end hours will fail
             return
+        self._hours_width = (
+            max(self.renderer.pdf.get_string_width(str(hour)) for hour in hours) + 2 * self.renderer.pdf.c_margin
+        )
         # Don't use unpacking (will fail if there is only 1 hour)
         # so first_hour and last_hour can be the same
         first_hour = hours[0]
@@ -151,9 +162,7 @@ class HoursManager:
             return
         self.renderer.pdf.y = self.y_for_hour(hour)
         # Don't move X and Y (X stays the same, Y is changed according to y_for_hour)
-        self.renderer.pdf.cell(
-            self.renderer.settings.hours_width, 6, str(hour), "T", align=Align.R, new_x=XPos.LEFT, new_y=YPos.TOP
-        )
+        self.renderer.pdf.cell(self.width, 6, str(hour), "T", align=Align.R, new_x=XPos.LEFT, new_y=YPos.TOP)
 
     def y_for_hour(self, hour: Hour) -> float:
         """Return the Y position on which we should display an hour."""
@@ -170,7 +179,7 @@ class HoursManager:
             self.renderer.pdf.t_margin
             + self.renderer.settings.title_height
             + self.renderer.settings.day_height
-            + self.renderer.eff_day_height * ((hour - self.start_hour) / int(self.day_length))
+            + self.renderer.eff_day_height * ((hour - self.start_hour) / float(self.day_length))
         )
 
 
@@ -225,7 +234,7 @@ class LessonMetrics:
     def calculate(self, week_shown: bool, items_n: int):
         """Calculate some values depending on the specified settings."""
         # Set the cell height depending on the number of items, limit to 7 mm
-        self.cell_height = min(7, self.height / items_n)
+        self.cell_height = 7 if items_n == 0 else min(7, self.height / items_n)
         # Calculate the space to put at the top and bottom
         self.top_bottom_padding = max((self.height - items_n * self.cell_height) / 2, 0)
 
@@ -357,8 +366,11 @@ class DaysManager:
         #     cell_height = lesson_height / items_n
         # Calculate the cell height depending on paddings
         cell_height = (
-            metrics.height - metrics.top_padding - 2 * metrics.top_bottom_padding - metrics.bottom_padding
-        ) / items_n
+            0
+            if items_n == 0
+            else (metrics.height - metrics.top_padding - 2 * metrics.top_bottom_padding - metrics.bottom_padding)
+            / items_n
+        )
         x = self.renderer.pdf.x
         y = self.renderer.pdf.y
         # Draw a rectangle around the lesson
@@ -512,13 +524,17 @@ class TimetableRenderer:
 
         # Push the margin so epw (effective page width) is updated accordingly
         # and it's easier for the rest of the process
-        self.pdf.l_margin += self.settings.hours_width
+        self.pdf.l_margin += self.hours.width
 
         for i, day in enumerate(self.timetable):
             self.days.render(i, day)
 
+        # Render the pause hours
+        if self.settings.show_pause:
+            self.render_pause()
+
         # Restore the previous state
-        self.pdf.l_margin -= self.settings.hours_width
+        self.pdf.l_margin -= self.hours.width
 
     @property
     def eff_day_height(self):
@@ -540,6 +556,45 @@ class TimetableRenderer:
 
             with self.pdf.local_context(text_color=(68, 113, 196) if self.settings.title_shadow else None):
                 self.pdf.cell(0, 15, title, align=Align.C, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+
+    def render_pause(self):
+        """Render the two lines that represent the pause hours."""
+        # Stop here if there are no hours
+        if not self.hours.start_hour or not self.hours.end_hour:
+            return
+
+        # Create the pauses container
+        pause_hours = PausesContainer(self.hours.start_hour, self.hours.end_hour)
+        for day in self.timetable.days:
+            # If there are no lessons, stop here to avoid further problems
+            if not day.lessons:
+                continue
+            # Create the pauses list for each day and add it
+            pauses_for_today = Pauses(day.lessons[0].start, day.lessons[-1].end)
+            pause_hours.days.append(pauses_for_today)
+
+            prev_lesson: Lesson | None = None
+            for lesson in day:
+                # If the end hour of the previous lesson doesn't match the start hour of the current lesson,
+                # then we need to add a pause
+                if prev_lesson and lesson.start != prev_lesson.end:
+                    pauses_for_today.pauses.append(Pause(prev_lesson.end, lesson.start))
+                prev_lesson = lesson
+
+        pause = pause_hours.intersection()
+        if not pause:
+            return
+
+        # Draw a dashed line if we are in black and white mode, a red line otherwise
+        settings = {"dash_pattern": {"dash": 2, "gap": 2}} if self.settings.black_white else {"draw_color": (255, 0, 0)}
+        with self.pdf.local_context(**settings, line_width=0.5, stroke_cap_style=StrokeCapStyle.ROUND):
+            for hour in (pause.start, pause.end):
+                self.pdf.line(
+                    self.pdf.l_margin,
+                    self.hours.y_for_hour(hour),
+                    self.pdf.w - self.pdf.r_margin,
+                    self.hours.y_for_hour(hour),
+                )
 
 
 base_path = Path(__file__).parent

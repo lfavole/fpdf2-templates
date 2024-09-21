@@ -12,13 +12,12 @@ get_lesson = re.compile(
 (?P<start> \d+ [:h] \d+ )
 \s* - \s*
 (?P<end> \d+ [:h] \d+ )
-\s+
-(?P<name>.*?)
-\s+ - \s+
-(?P<teacher>.*?)
+(?: \s+ (?P<name> (?:[^#].*?)? ) )?
+(?: \s+ - \s+ (?P<teacher> (?:[^#].*?)? ) )?
 (?: \s+ \( (?P<room>.*?) \) )?
 (?: \s+ \( (?P<week>.*?) \) )?
 (?: \s+ (?P<color>\#.*?) )?
+(?P<removed> \s+ - \s+ Dispensé)?
 $
 """
 ).match
@@ -76,6 +75,8 @@ class TimetableParser:
         self.timetable.left_week = self.config.get("left_week", "")
         self.timetable.right_week = self.config.get("right_week", "")
 
+        # TODO add more settings: use the Settings class?
+        self.settings.hours_width = int(self.config["hours_width"]) if "hours_width" in self.config else None
         self.settings.title_shadow = self.config.get("title_shadow", "").lower() == "true"
 
     def parse_empty_line_or_comment(self, _i: int, line: str) -> bool:
@@ -133,11 +134,12 @@ class TimetableParser:
             lesson = Lesson(
                 start=Hour(match["start"]),
                 end=Hour(match["end"]),
-                name=match["name"],
-                teacher=match["teacher"],
-                room=match["room"],
+                name=match["name"] or "",
+                teacher=match["teacher"] or "",
+                room=match["room"] or "",
+                color=match["color"] or self.config.get("color." + (match["name"] or "")),
                 week=week,
-                color=match["color"] or self.config.get("color." + match["name"]),
+                removed=bool(match["removed"]),
             )
             self.current_day.lessons.append(lesson)
             return True

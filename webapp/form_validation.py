@@ -162,6 +162,7 @@ def render_form(
 
     if callable(schema):
         from typer.utils import get_params_from_function
+
         params = get_params_from_function(schema)
         schema = {}
         for name, value in params.items():

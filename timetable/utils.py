@@ -411,17 +411,63 @@ class Timetable:
 
 @dataclass
 class Pause:
+    """A pause (a range between two `Hour`s)."""
     start: Hour
     end: Hour
 
-    def intersection(self: Self, *others: Self) -> Self | None:
-        start = max(self.start, *(other.start for other in others))
-        end = min(self.end, *(other.end for other in others))
-        if end < start:  # If the days overlap
+    @classmethod
+    def intersection(cls, *pauses: Self) -> Self | None:
+        """
+        Return the longest `Pause` object that is contained into all the given `Pause`s
+        or `None` if it doesn't exist.
+
+        >>> Pause.intersection(Pause(Hour(8), Hour(17)), Pause(Hour(12), Hour(13)))
+        Pause(start=Hour(12, 0), end=Hour(13, 0))
+        >>> Pause.intersection(Pause(Hour(11), Hour(13)), Pause(Hour(12), Hour(14)))
+        Pause(start=Hour(12, 0), end=Hour(13, 0))
+        """
+        # If there are no pauses, stop here to avoid further errors with max and min
+        if not pauses:
             return None
-        return type(self)(start, end)
+        # Latest start hour
+        start = max(*(pause.start for pause in pauses))
+        # Earliest end hour
+        end = min(*(pause.end for pause in pauses))
+        # If a pause begins after another ends, it means there is no intersection
+        if end < start:
+            return None
+        return cls(start, end)
+
+    def __bool__(self):
+        """
+        Returns `True` if the pause is not empty (the start hour and end hour are different), `False` otherwise.
+
+        >>> bool(Pause(Hour(12), Hour(13)))
+        True
+        >>> bool(Pause(Hour(13), Hour(13)))
+        False
+        """
+        return self.start != self.end
 
     def __contains__(self, other: Self | Hour):
+        """
+        Returns `True` if the pause contains the given `Hour` or `Pause`, `False` otherwise.
+
+        >>> Pause(Hour(8), Hour(9)) in Pause(Hour(8), Hour(9))
+        True
+        >>> Pause(Hour(8, 15), Hour(8, 45)) in Pause(Hour(8), Hour(9))
+        True
+        >>> Pause(Hour(8), Hour(10)) in Pause(Hour(8), Hour(9))
+        False
+        >>> Hour(8) in Pause(Hour(8), Hour(9))
+        True
+        >>> Hour(8, 30) in Pause(Hour(8), Hour(9))
+        True
+        >>> Hour(9) in Pause(Hour(8), Hour(9))
+        True
+        >>> Hour(10) in Pause(Hour(8), Hour(9))
+        False
+        """
         if isinstance(other, Hour):
             return self.start <= other <= self.end
         return self.start <= other.start and other.end <= self.end
@@ -429,32 +475,113 @@ class Pause:
 
 @dataclass
 class Pauses:
+    """An object that holds the `Pause` objects for a day."""
+    start: Hour
+    end: Hour
     pauses: list[Pause] = field(default_factory=list)
 
     def __contains__(self, other: Hour | Pause):
+        """
+        Returns `True` if any pauses in the day contains the given `Hour` or `Pause`, `False` otherwise.
+
+        >>> pauses = Pauses(Hour(8), Hour(17), [Pause(Hour(8), Hour(9)), Pause(Hour(16), Hour(17))])
+        >>> Pause(Hour(8), Hour(9)) in pauses
+        True
+        >>> Pause(Hour(8, 15), Hour(8, 45)) in pauses
+        True
+        >>> Pause(Hour(8), Hour(10)) in pauses
+        False
+        >>> Hour(8) in pauses
+        True
+        >>> Hour(8, 30) in pauses
+        True
+        >>> Hour(9) in pauses
+        True
+        >>> Hour(10) in pauses
+        False
+
+        >>> # Empty Pauses objects
+        >>> pauses = Pauses(Hour(8), Hour(17))
+        >>> Hour(8) in pauses
+        True
+        >>> Pause(Hour(8), Hour(10)) in pauses
+        True
+
+        >>> # Pauses outside the day
+        >>> pauses = Pauses(Hour(8), Hour(17), [Pause(Hour(12), Hour(13))])
+        >>> Pause(Hour(6), Hour(7)) in pauses
+        True
+        >>> Pause(Hour(9), Hour(10)) in pauses
+        False
+        >>> Pause(Hour(17), Hour(18)) in pauses
+        True
+        """
+        # If there are no pauses, it means that all the day is a pause
+        # so that day contains all hours and pauses
+        if not self.pauses:
+            return True
+        # If we are outside the day, it's a pause
+        if isinstance(other, Pause):
+            if other.end <= self.start or self.end <= other.start:
+                return True
+        else:
+            if other <= self.start or self.end <= other:
+                return True
         for pause in self.pauses:
             if other in pause:
                 return True
         return False
 
     def __iter__(self):
-        return iter(self.pauses)
+        """
+        Return an iterator on all the pauses on the current day:
+        the specified pauses plus the implicit start and end pauses.
+
+        >>> [*Pauses(Hour(8), Hour(17), [Pause(Hour(11), Hour(13))])]
+        [Pause(start=Hour(0, 0), end=Hour(8, 0)), Pause(start=Hour(11, 0), end=Hour(13, 0)), Pause(start=Hour(17, 0), end=Hour(23, 59))]
+        """
+        return itertools.chain((Pause(Hour(0), self.start),), self.pauses, (Pause(self.end, Hour(-1, True)),))
 
 
 @dataclass
 class PausesContainer:
+    """An object that holds a list of `Pauses` objects (pauses for each day)."""
     start_hour: Hour
     end_hour: Hour
     days: list[Pauses] = field(default_factory=list)
 
     def intersection(self):
-        for pauses in itertools.product(*(pauses_day.pauses for pauses_day in self.days)):
-            print(pauses)
+        """
+        Returns the pause that is common to all days or `None` if it doesn't exist.
+
+        >>> container = PausesContainer(Hour(8), Hour(17))
+        >>> start_of_day = Pause(Hour(0), Hour(8))
+        >>> end_of_day = Pause(Hour(17), Hour(-1, True))
+        >>> container.days.append(Pauses(Hour(8), Hour(17), [Pause(Hour(11), Hour(13))]))
+        >>> container.days.append(Pauses(Hour(8), Hour(17), [Pause(Hour(12), Hour(14))]))
+        >>> container.intersection()
+        Pause(start=Hour(12, 0), end=Hour(13, 0))
+
+        >>> # With smaller pauses
+        >>> container.days.append(Pauses(Hour(8), Hour(17), [start_of_day, Pause(Hour(13), Hour(14)), end_of_day]))
+        >>> container.intersection()
+
+        >>> # Without intersection
+        >>> container.days.append(Pauses(Hour(8), Hour(17), [start_of_day, Pause(Hour(11), Hour(12)), end_of_day]))
+        >>> container.intersection()
+        """
+        # For all the combinations of pauses (all the ways to take one pause on each day)
+        for pauses in itertools.product(*self.days):
+            # If the pauses list is empty, all elements will have a length of 0 so we stop here
             if len(pauses) == 0:
-                break  # All elements will have a length of 0
-            intersection: Pause = pauses[0].intersection(*pauses[1:])
+                break
+            # Calculate the intersection of all the pauses
+            intersection = Pause.intersection(*pauses)
+            # If there is an intersection (this excludes empty pauses)
+            # and this intersection is within the day, return it
             if intersection and intersection in Pause(self.start_hour, self.end_hour):
                 return intersection
+        # There is no intersection, return None
         return None
 
 
@@ -490,7 +617,8 @@ class _SettingsBase:
         for name in cls.__dataclass_fields__:
             value = NOTHING
             for obj in objs[::-1]:
-                if name in obj.__dict__:
+                # Handle nonexistent keys and None values
+                if obj.__dict__.get(name) is not None:
                     value = obj.__dict__.get(name)
                     break
             if value is not NOTHING:
