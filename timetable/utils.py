@@ -1,6 +1,7 @@
 import enum
 from dataclasses import dataclass, field
 from functools import total_ordering
+import itertools
 from typing import Annotated, Iterable, Literal, Protocol, Self, TypeVar
 
 import click
@@ -49,7 +50,11 @@ def range_any(start: _T, end: _T | None = None, interval=1, include_end=False) -
     ok_with_abs = all(isinstance(item, (int, float)) for item in (start, end, interval)) and not all(
         isinstance(item, int) for item in (start, end, interval)
     )
-    while abs(current - end) > 1e-6 if ok_with_abs else (current > end) if reverse else (current < end):  # type: ignore
+    while (
+        ((current - end) if reverse else (end - current)) > 1e-6  # type: ignore
+        if ok_with_abs
+        else (current > end) if reverse else (current < end)
+    ):
         yield current
         current += interval
     if include_end:
@@ -404,6 +409,55 @@ class Timetable:
         return TimetableParser(data).timetable
 
 
+@dataclass
+class Pause:
+    start: Hour
+    end: Hour
+
+    def intersection(self: Self, *others: Self) -> Self | None:
+        start = max(self.start, *(other.start for other in others))
+        end = min(self.end, *(other.end for other in others))
+        if end < start:  # If the days overlap
+            return None
+        return type(self)(start, end)
+
+    def __contains__(self, other: Self | Hour):
+        if isinstance(other, Hour):
+            return self.start <= other <= self.end
+        return self.start <= other.start and other.end <= self.end
+
+
+@dataclass
+class Pauses:
+    pauses: list[Pause] = field(default_factory=list)
+
+    def __contains__(self, other: Hour | Pause):
+        for pause in self.pauses:
+            if other in pause:
+                return True
+        return False
+
+    def __iter__(self):
+        return iter(self.pauses)
+
+
+@dataclass
+class PausesContainer:
+    start_hour: Hour
+    end_hour: Hour
+    days: list[Pauses] = field(default_factory=list)
+
+    def intersection(self):
+        for pauses in itertools.product(*(pauses_day.pauses for pauses_day in self.days)):
+            print(pauses)
+            if len(pauses) == 0:
+                break  # All elements will have a length of 0
+            intersection: Pause = pauses[0].intersection(*pauses[1:])
+            if intersection and intersection in Pause(self.start_hour, self.end_hour):
+                return intersection
+        return None
+
+
 NOTHING = object()
 
 
@@ -413,13 +467,14 @@ class _SettingsBase:
 
     title_height: float = 15
     title_shadow: bool = False
-    hours_width: float = 10
+    hours_width: float | None = None
     wrap_hour: Annotated[Hour, typer.Option(click_type=HourParamType())] = None  # type: ignore
     day_height: float = 10
     show_weeks: bool = True
     show_teacher: bool = True
     show_room: bool = True
     show_first_last: bool = True
+    show_pause: bool = True
     black_white: bool = False
 
     @classmethod
