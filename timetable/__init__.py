@@ -243,11 +243,11 @@ class LessonMetrics:
             # If there is enough space to display the week at the bottom, display it there
             if self.top_bottom_padding + self.bottom_padding >= self.week_height * 0:
                 self.week_y_pos = self.end_y - self.week_height  # Start writing above the week
-                self.bottom_padding += self.week_height / 2.5
+                self.bottom_padding += self.week_height / (2.5 if items_n == 3 else 1.25)
             else:
                 # Otherwise display it at the top
                 self.week_y_pos = self.start_y
-                self.top_padding += self.week_height / 2.5
+                self.top_padding += self.week_height / (2.5 if items_n == 3 else 1.25)
 
             # If some space is missing, add it
             # at the top or at the bottom (where the week is written)
