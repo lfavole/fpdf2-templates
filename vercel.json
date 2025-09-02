@@ -1,21 +1,15 @@
 {
-    "builds": [
+    "$schema": "https://openapi.vercel.sh/vercel.json",
+    "buildCommand": "python3 webapp/build.py",
+    "outputDirectory": "static",
+    "rewrites": [
         {
-            "src": "webapp/app.py",
-            "use": "@vercel/python"
+            "source": "/static/(.*)",
+            "destination": "/$1"
         },
         {
-            "src": "webapp/build.sh",
-            "use": "@vercel/static-build",
-            "config": {
-                "distDir": "."
-            }
-        }
-    ],
-    "routes": [
-        {
-            "src": "/(.*)",
-            "dest": "webapp/app.py"
+            "source": "/(.*)",
+            "destination": "api/app.py"
         }
     ]
 }
