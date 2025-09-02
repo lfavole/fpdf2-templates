@@ -30,7 +30,10 @@ def minify_response(response: Response):
             # If we can't get the data because it's a stream
             # or because of a wrong encoding, we stop here
             return response
-        response.set_data(minify_html.minify(data, minify_css=True, minify_js=True, do_not_minify_doctype=True))
+        try:
+            response.set_data(minify_html.minify(data, minify_css=True, minify_js=True, minify_doctype=False))
+        except:
+            pass
     return response
 
 

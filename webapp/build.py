@@ -48,7 +48,7 @@ for url in urls:
                     prefix + data,
                     minify_css=True,
                     minify_js=True,
-                    do_not_minify_doctype=True,
+                    minify_doctype=False,
                 ).removeprefix(prefix)
             except:  # pylint: disable=W0702
                 pass
