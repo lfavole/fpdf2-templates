@@ -2,7 +2,7 @@ import enum
 from dataclasses import dataclass, field
 from functools import total_ordering
 import itertools
-from typing import Annotated, Iterable, Literal, Protocol, Self, TypeVar
+from typing import Annotated, Iterable, Literal, Protocol, Self, TypeVar, TYPE_CHECKING
 
 import click
 import typer
@@ -84,19 +84,17 @@ class Hour:
         """
         self.total = 0
 
+        # If we are given an already created hour instance (like in __add__),
+        # immediatly set the total and abort
+        if isinstance(hour, type(self)):
+            self.total = hour.total
+            return
+
         # If we want to directly set the total, set it and abort
         if minute is True:
             if not isinstance(hour, (int, float)):
                 raise TypeError("Trying to create an Hour instance from a total but the total is not an int/float")
             self.total = int(hour % (24 * 60))
-            return
-
-        # If we are given an already created hour instance (like in __add__),
-        # immediatly set the total and abort
-        if isinstance(hour, type(self)):
-            if minute:
-                raise TypeError("You mustn't specify the minutes argument if you give an Hour instance for hours")
-            self.total = hour.total
             return
 
         # If we have a string, parse it
@@ -156,7 +154,7 @@ class Hour:
         >>> Hour(9, 0).floor(2)
         Hour(8, 0)
         """
-        return self // interval * type(self)(interval)
+        return int(self // interval) * type(self)(interval)
 
     def ceil(self: Self, interval: Self | str | float = 1):
         """
@@ -173,6 +171,18 @@ class Hour:
         """
         interval = type(self)(interval)
         return self.floor(interval) + (0 if (self % interval).total == 0 else interval)
+
+    def difference(self: Self, other: Self | str | float):
+        """
+        Return the difference between this hour and the other hour.
+
+        >>> Hour(8, 30).difference(Hour(8, 0))
+        Hour(0, 30)
+        >>> Hour(8, 0).difference(Hour(8, 30))
+        Hour(0, 30)
+        """
+        other = type(self)(other)
+        return self - other if self > other else other - self
 
     def __add__(self: Self, other: Self | str | float):
         """
@@ -212,22 +222,38 @@ class Hour:
     def __truediv__(self: Self, other: Self | str | float):
         """
         >>> Hour(8, 0) / 2
-        4.0
-        >>> round(Hour(8, 0) / 3, 3)
-        2.667
+        Hour(4, 0)
+        >>> Hour(8, 0) / Hour(2, 0)
+        4
+        >>> Hour(8, 0) / 3
+        Hour(2, 40)
         """
-        return self.total / type(self)(other).total
+        if isinstance(other, type(self)):
+            return self.total / other.total
+        # Don't convert immediately to hours (1 != Hour(1).total)
+        if isinstance(other, (int, float)):
+            return Hour(self.total / other, True)
+        return Hour(self.total / type(self)(other).total, True)
 
     __rtruediv__ = __itruediv__ = __truediv__
 
     def __floordiv__(self: Self, other: Self | str | float):
         """
         >>> Hour(8, 0) // 2
+        Hour(4, 0)
+        >>> Hour(8, 0) // Hour(2, 0)
         4
         >>> Hour(8, 0) // 3
+        Hour(2, 0)
+        >>> Hour(8, 0) // Hour(3, 0)
         2
         """
-        return self.total // type(self)(other).total
+        if isinstance(other, type(self)):
+            return self.total // other.total
+        # Don't convert immediately to hours (1 != Hour(1).total)
+        if isinstance(other, (int, float)):
+            return Hour(self.total // other, True)
+        return Hour(self.total // type(self)(other).total, True)
 
     __rfloordiv__ = __ifloordiv__ = __floordiv__
 
@@ -357,6 +383,7 @@ class Lesson:
     color: str | DeviceRGB | None = None
     week: Week = Week.ALWAYS
     removed: bool = False
+    auto_moved: bool = False
 
     def __post_init__(self):
         if isinstance(self.color, str) and len(self.color) == 7 and self.color[0] == "#":
@@ -377,11 +404,56 @@ class Lesson:
 class Day:
     """A day in a timetable."""
 
+    timetable: "Timetable"
     name: str
     lessons: list[Lesson] = field(default_factory=list)
 
     def __iter__(self):
         return iter(self.lessons)
+
+    @property
+    def start_hour(self):
+        return min(lesson.start for lesson in self.lessons)
+
+    @property
+    def end_hour(self):
+        return max(lesson.end for lesson in self.lessons)
+
+    def move_lessons_if_needed(self):
+        hour_slots: list[Pause] = []
+        for lesson in self.lessons:
+            for hour_slot in hour_slots:
+                if (
+                    # the lesson starts/ends during another lesson
+                    hour_slot.start == lesson.start
+                    or hour_slot.end == lesson.end
+                    # any(hour_slot.start < hour < hour_slot.end for hour in (lesson.start, lesson.end))
+                    # or it is exactly over another one
+                    or hour_slot.start == lesson.start and hour_slot.end == lesson.end
+                ):
+                    lesson.auto_moved = True
+                    break
+
+            if lesson.auto_moved:
+                continue
+            hour_slots.append(Pause(lesson.start, lesson.end))
+
+        lessons_to_move = [lesson for lesson in self.lessons if lesson.auto_moved]
+        if not lessons_to_move:
+            return
+
+        real_end_hour = max(lesson.end for lesson in self.lessons if not lesson.auto_moved)
+
+        margin = Hour(1)
+        max_length = Hour(1, 30)
+        max_end_hour = Hour(21, 30)  # FIXME
+        lesson_length = min((max_end_hour - real_end_hour) / len(lessons_to_move), max_length)
+
+        start_hour = real_end_hour + margin
+        for lesson in lessons_to_move:
+            lesson.start = start_hour
+            lesson.end = start_hour + lesson_length
+            start_hour += lesson_length
 
 
 @dataclass
@@ -407,6 +479,10 @@ class Timetable:
         from .tt_parser import TimetableParser
 
         return TimetableParser(data).timetable
+
+    def move_lessons_if_needed(self):
+        for day in self.days:
+            day.move_lessons_if_needed()
 
 
 @dataclass
@@ -603,6 +679,8 @@ class _SettingsBase:
     show_first_last: bool = True
     show_pause: bool = True
     black_white: bool = False
+    render_real_hours: bool = False
+    no_styles: bool = False
 
     @classmethod
     def merge(cls, *objs: "_SettingsBase"):
@@ -618,7 +696,7 @@ class _SettingsBase:
             value = NOTHING
             for obj in objs[::-1]:
                 # Handle nonexistent keys and None values
-                if obj.__dict__.get(name) is not None:
+                if obj.__dict__.get(name) != cls.__dict__.get(name):
                     value = obj.__dict__.get(name)
                     break
             if value is not NOTHING:
@@ -630,6 +708,8 @@ class _SettingsBase:
 @dataclass
 class Settings(_SettingsBase):
     """Settings for the timetable renderer."""
+    colors: dict = field(default_factory=dict)
+    real_hours: dict = field(default_factory=dict)
 
 
 app = typer.Typer()

@@ -5,16 +5,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from fpdf import FPDF
-from fpdf.enums import Align, CharVPos, RenderStyle, StrokeCapStyle, XPos, YPos
+from fpdf.enums import Align, CharVPos, MethodReturnValue, RenderStyle, StrokeCapStyle, XPos, YPos
 from fpdf.fonts import FontFace
 from fpdf.line_break import Fragment
 
 from fonts import add_font
 from .tt_parser import TimetableParser
 from .utils import CLI, Day, Hour, Lesson, Pause, Pauses, PausesContainer, Settings, Timetable, Week, app, range_any
-
-left_week = ContextVar("left_week", default="")
-right_week = ContextVar("right_week", default="")
 
 
 class PatchedFPDF(FPDF):
@@ -29,8 +26,14 @@ class PatchedFPDF(FPDF):
         add_font(self, "Montserrat")
         self.set_font("Montserrat")
 
+        self.all_markers = set(
+            getattr(self, attr)
+            for attr in dir(self)
+            if attr.startswith("MARKDOWN_") and attr.endswith("_MARKER")
+        )
+
     def cell(
-        self, w: float | None = None, h: float | None = None, txt: str = "", *args, **kwargs
+        self, w: float | None = None, h: float | None = None, txt: str = "", *args, reduce=True, **kwargs
     ):  # pylint: disable=W1113
         """Draw a cell."""
         if w == 0:
@@ -38,8 +41,7 @@ class PatchedFPDF(FPDF):
         font_size = None
         if (
             txt
-            and txt not in (left_week.get(), right_week.get())
-            and txt[-3:-2] != ":"
+            and reduce
             and w
             and (str_width := self.get_string_width(txt)) > (target_width := w - self.c_margin * 2)
         ):
@@ -77,6 +79,8 @@ class HoursManager:
 
     renderer: "TimetableRenderer"
     _hours_width: float | None = field(default=None, init=False)
+
+    REAL_HOURS = object()
 
     def __post_init__(self):
         starts: list[Hour] = []
@@ -130,39 +134,66 @@ class HoursManager:
         assert self._hours_width, "hours_width should have been filled"
         return self._hours_width
 
-    def render(self, interval: Hour | float = 1):
+    def render(self, interval: "Hour | float | type[HoursManager.REAL_HOURS] | None" = None):
         """Render the hours (at the left of the timetable) with the given interval."""
         if self.start_hour is None or self.end_hour is None:
             assert self.start_hour is None and self.end_hour is None, "Only one of the hours is None"
             return
-        hours: list[Hour] = [
-            *range_any(
-                self.start_hour.ceil(interval),  # Start with the next hour (8:30 -> 9:00)...
-                self.end_hour.floor(interval),  # ...and end with the previous hour (16:30 -> 16:00)
-                interval,  # type: ignore
-                include_end=True,
-            )
-        ]
-        if not hours:
+        if interval is None:
+            interval = 1
+        if interval is self.REAL_HOURS:
+            hours_set: set[Hour] = set()
+            for day in self.renderer.timetable.days:
+                for lesson in day:
+                    hours_set.add(lesson.start)
+                    hours_set.add(lesson.end)
+            self.hours = sorted(hours_set)
+        else:
+            self.hours: list[Hour] = [
+                *range_any(
+                    self.start_hour.ceil(interval),  # Start with the next hour (8:30 -> 9:00)...
+                    self.end_hour.floor(interval),  # ...and end with the previous hour (16:30 -> 16:00)
+                    interval,  # type: ignore
+                    include_end=True,
+                )
+            ]
+        if not self.hours:
             # Stop here because getting the start and end hours will fail
             return
         self._hours_width = (
-            max(self.renderer.pdf.get_string_width(str(hour)) for hour in hours) + 2 * self.renderer.pdf.c_margin
+            max(self.renderer.pdf.get_string_width(str(hour)) for hour in self.hours) + 2 * self.renderer.pdf.c_margin
         )
         # Don't use unpacking (will fail if there is only 1 hour)
         # so first_hour and last_hour can be the same
-        first_hour = hours[0]
-        last_hour = hours[-1]
-        for hour in hours:
-            self.render_one_hour(hour, first_or_last=hour in (first_hour, last_hour))
+        first_hour = self.hours[0]
+        last_hour = self.hours[-1]
+        for hour in self.hours:
+            self.render_one_hour(hour, first_or_last=interval is not self.REAL_HOURS and hour in (first_hour, last_hour))
 
     def render_one_hour(self, hour: Hour, first_or_last=False):
         """Display one hour."""
         if first_or_last and self.renderer.settings.show_first_last is False:
             return
         self.renderer.pdf.y = self.y_for_hour(hour)
-        # Don't move X and Y (X stays the same, Y is changed according to y_for_hour)
-        self.renderer.pdf.cell(self.width, 6, str(hour), "T", align=Align.R, new_x=XPos.LEFT, new_y=YPos.TOP)
+        border = "T"
+        other_hours = set(h for h in self.hours if h != hour)
+        if other_hours:
+            nearest_hour = sorted(other_hours, key=lambda h: h.difference(hour))[0]
+            if hour < nearest_hour and hour.difference(nearest_hour) < Hour(0, 20):
+                self.renderer.pdf.y -= 6
+                border = "B"
+
+        real_hour = self.renderer.settings.real_hours.get(hour)
+
+        # Display the hour in bold if there's the real hour
+        emphasis = "B" if real_hour else ""
+        with self.renderer.pdf.use_font_face(FontFace(emphasis=emphasis)):
+            # Go under the cell to (optionally) draw the other cell
+            self.renderer.pdf.cell(self.width, 6, str(hour), border, reduce=False, align=Align.R, new_x=XPos.LEFT, new_y=YPos.NEXT)
+
+        if real_hour:
+            with self.renderer.pdf.use_font_face(FontFace(size_pt=10)):
+                self.renderer.pdf.cell(self.width, 6, f"({real_hour})", reduce=False, align=Align.R, new_x=XPos.LEFT, new_y=YPos.NEXT)
 
     def y_for_hour(self, hour: Hour) -> float:
         """Return the Y position on which we should display an hour."""
@@ -179,7 +210,7 @@ class HoursManager:
             self.renderer.pdf.t_margin
             + self.renderer.settings.title_height
             + self.renderer.settings.day_height
-            + self.renderer.eff_day_height * ((hour - self.start_hour) / float(self.day_length))
+            + self.renderer.eff_day_height * ((hour - self.start_hour) / self.day_length)
         )
 
 
@@ -205,7 +236,7 @@ class LessonMetrics:
     @property
     def week_margin(self):
         """The margin in the week cells."""
-        return self.pdf.c_margin / 2
+        return self.pdf.c_margin / 2   # half of the normal cell margin!
 
     @property
     def week_width(self):
@@ -219,7 +250,7 @@ class LessonMetrics:
     @property
     def week_height(self):
         """The height of a week label."""
-        return self.week_font_size / self.pdf.k + 2 * self.week_margin
+        return min(self.cell_height,  self.week_font_size / self.pdf.k + 2 * self.week_margin)
 
     @property
     def height(self):
@@ -230,6 +261,19 @@ class LessonMetrics:
         20
         """
         return self.end_y - self.start_y
+
+    @property
+    def cell_height_other(self):
+        """The height of the cell"""
+        # if lesson_height < items_n * cell_height:
+        #     cell_height = lesson_height / items_n
+        # Calculate the cell height depending on paddings
+        return (
+            0
+            if self.items_n == 0
+            else (self.height - self.top_padding - 2 * self.top_bottom_padding - self.bottom_padding)
+            / self.items_n
+        )
 
     def calculate(self, week_shown: bool, items_n: int):
         """Calculate some values depending on the specified settings."""
@@ -327,9 +371,53 @@ class DaysManager:
         """
         return self.renderer.pdf.l_margin + self.day_width * day_n
 
+
+    @property
+    def styles(self):
+        # The lesson name is in bold and the room is in italic
+        return {
+            "name": self.renderer.pdf.MARKDOWN_BOLD_MARKER,
+            "room": self.renderer.pdf.MARKDOWN_ITALICS_MARKER,
+        }
+
+    def _add_style(self, key, value):
+        """
+        Add Markdown styling to a lesson line.
+
+        >>> timetable = Timetable()
+        >>> timetable.days.append(Day("..."))
+        >>> timetable.days[0].lessons.extend([
+        ...     Lesson(Hour(8), Hour(9), "", ""),
+        ...     Lesson(Hour(16), Hour(17), "", ""),
+        ... ])
+        ...
+        >>> renderer = TimetableRenderer(timetable)
+        >>> renderer.pdf = FPDF()
+        >>> renderer._add_style("name", "test")
+        "**test**"
+        >>> renderer._add_style("teacher", "test")
+        "test"
+        >>> renderer._add_style("room", "test")
+        "__test__"
+        >>> renderer._add_style("name", "__test__")
+        "__test__"
+        """
+        if (
+            not value
+            or self.renderer.settings.no_styles
+            or any(marker in value for marker in self.renderer.pdf.all_markers)
+            or not (marker_to_add := self.styles.get(key))
+        ):
+            return value
+
+        return marker_to_add + value + marker_to_add
+
     def render_lesson(self, lesson: Lesson, day_n: int):
         """Render a lesson."""
         # Set the background if there is any
+        if not lesson.color and self.renderer.settings.colors.get(lesson.name):
+            lesson.color = self.renderer.settings.colors.get(lesson.name)
+
         if lesson.color and not self.renderer.settings.black_white:
             self.renderer.pdf.set_fill_color(lesson.color)  # type: ignore
 
@@ -353,24 +441,23 @@ class DaysManager:
 
         metrics.day_width = self.day_width / (1 if week == Week.ALWAYS else 2)
         # Add all items to the list, otherwise it messes up the styles
-        items = [
-            lesson.name.strip(),
-            lesson.teacher.strip() if self.renderer.settings.show_teacher else "",
-            lesson.room.strip() if self.renderer.settings.show_room else "",  # type: ignore
-        ]
-
-        items_n = sum(bool(item) for item in items)
+        lines = {
+            "name": lesson.name.strip(),
+            "teacher": lesson.teacher.strip() if self.renderer.settings.show_teacher else "",
+            "room": lesson.room.strip() if self.renderer.settings.show_room else "",  # type: ignore
+        }
         week_shown = week != Week.ALWAYS and self.renderer.settings.show_weeks
-        metrics.calculate(week_shown, items_n)
-        # if lesson_height < items_n * cell_height:
-        #     cell_height = lesson_height / items_n
-        # Calculate the cell height depending on paddings
-        cell_height = (
-            0
-            if items_n == 0
-            else (metrics.height - metrics.top_padding - 2 * metrics.top_bottom_padding - metrics.bottom_padding)
-            / items_n
-        )
+        lines = {key: self._add_style(key, value) for key, value in lines.items() if value}
+
+        if "room" in lines and not week_shown:
+            metrics.calculate(week_shown, len(lines) - 1)  # without the room
+            # If there's no space at the top and bottom, remove the room line
+            if not metrics.top_bottom_padding and "country" not in lines["name"]:
+                lines["teacher"] += f' ({lines["room"]})'
+                del lines["room"]
+
+        metrics.calculate(week_shown, len(lines))
+
         x = self.renderer.pdf.x
         y = self.renderer.pdf.y
         # Draw a rectangle around the lesson
@@ -386,26 +473,45 @@ class DaysManager:
         # Leave some space at the top
         self.renderer.pdf.y += metrics.top_bottom_padding + metrics.top_padding
 
-        for i, item in enumerate(items):
+        for i, (key, item) in enumerate(lines.items()):
             if not item:
                 continue
-            with self.renderer.pdf.use_font_face(FontFace(emphasis=("B", "", "I")[i])):
-                if "\n" in item:
-                    # Attempt to wrap only if there is a hard line break
-                    self.renderer.pdf.multi_cell(
-                        metrics.day_width,
-                        cell_height,
-                        item,
-                        align=Align.C,
-                        max_line_height=(cell_height / (item.count("\n") + 1)),
-                        new_x=XPos.LEFT,
-                        new_y=YPos.NEXT,
-                    )
+
+            width = metrics.day_width
+            align = Align.C
+
+            # the last cell of a week-dependent lesson
+            if i == len(lines) - 1 and week_shown:
+                text_width = self.renderer.pdf.get_string_width(item)
+                if text_width > width - self.renderer.pdf.c_margin * 2:
+                    # the text doesn't fit => only fit it on the left of the week
+                    width -= metrics.week_width
                 else:
-                    # Otherwise display everything on one line and reduce the font size
-                    self.renderer.pdf.cell(
-                        metrics.day_width, cell_height, item, align=Align.C, new_x=XPos.LEFT, new_y=YPos.NEXT
-                    )
+                    side_space = (width - text_width) / 2
+                    # if it overflows by x, remove x/2 to not make it overflow
+                    overflow = metrics.week_width - side_space
+                    if overflow > 0:
+                        # width -= overflow * 2 - 2 * self.renderer.pdf.c_margin
+                        width -= metrics.week_width
+                        align = Align.R
+
+            if "\n" in item:
+                # Attempt to wrap only if there is a hard line break
+                self.renderer.pdf.multi_cell(
+                    width,
+                    metrics.cell_height,
+                    item,
+                    align=align,
+                    max_line_height=(metrics.cell_height / (item.count("\n") + 1)),
+                    new_x=XPos.LEFT,
+                    new_y=YPos.NEXT,
+                    markdown=True,
+                )
+            else:
+                # Otherwise display everything on one line (because that reduces the font size if needed)
+                self.renderer.pdf.cell(
+                    width, metrics.cell_height, item, align=align, new_x=XPos.LEFT, new_y=YPos.NEXT, markdown=True
+                )
 
         # Leave some space at the bottom
         self.renderer.pdf.y += metrics.top_bottom_padding + metrics.bottom_padding
@@ -420,8 +526,6 @@ class DaysManager:
 
     def render_week(self, metrics: LessonMetrics, week: Week):
         """Render the week at the pre-configured position."""
-        token1 = left_week.set(self.renderer.timetable.left_week)
-        token2 = right_week.set(self.renderer.timetable.right_week)
         with self.renderer.pdf.use_font_face(FontFace(size_pt=metrics.week_font_size)):
             a = self.renderer.pdf.x
             b = self.renderer.pdf.y
@@ -435,15 +539,14 @@ class DaysManager:
                     Week.LEFT: self.renderer.timetable.left_week,
                     Week.RIGHT: self.renderer.timetable.right_week,
                 }[week],
-                True,
+                reduce=False,
+                border=True,
                 align=Align.C,
                 new_x=XPos.RIGHT,
                 new_y=YPos.TOP,
             )
             self.renderer.pdf.x = a
             self.renderer.pdf.y = b
-        left_week.reset(token1)
-        right_week.reset(token2)
 
     def striketrough(self, x, y, width, height):
         """Strike through a specified rectangular area, from top left to bottom right."""
@@ -520,7 +623,7 @@ class TimetableRenderer:
         self.render_title(self.timetable.title)
 
         self.pdf.set_font("", "", 12)
-        self.hours.render()
+        self.hours.render(HoursManager.REAL_HOURS if self.settings.render_real_hours else None)
 
         # Push the margin so epw (effective page width) is updated accordingly
         # and it's easier for the rest of the process
@@ -609,6 +712,7 @@ def real_main(settings: CLI):
         file = Path(timetable)
         result = TimetableParser(file.read_text("utf-8"))
         tt = result.timetable
+        tt.move_lessons_if_needed()
         TimetableRenderer(tt, Settings.merge(result.settings, settings)).render(pdf)
         if only_one_timetable:
             pdf.set_title(tt.title)

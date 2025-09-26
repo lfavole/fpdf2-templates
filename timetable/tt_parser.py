@@ -9,15 +9,18 @@ is_hr = re.compile(r"^---+$").match
 get_lesson = re.compile(
     r"""(?x)
 ^
-(?P<start> \d+ [:h] \d+ )
-\s* - \s*
-(?P<end> \d+ [:h] \d+ )
-(?: \s+ (?P<name> (?:[^#].*?)? ) )?
-(?: \s+ - \s+ (?P<teacher> (?:[^#].*?)? ) )?
-(?: \s+ \( (?P<room>.*?) \) )?
-(?: \s+ \( (?P<week>.*?) \) )?
-(?: \s+ (?P<color>\#.*?) )?
-(?P<removed> \s+ - \s+ Dispensé)?
+(?P<start> \d+ [:h] \d* )            # start time
+\s* - \s*                            # separator
+(?P<end> \d+ [:h] \d* )              # end time
+(?: \s+ (?P<name> (?:[^#].*?)? ) )?  # lesson name
+# teacher name (we allow hours in the lesson name)
+(?: (?<!\d[:h]) \s+ - \s+ (?P<teacher> (?:[^#].*?)? ) )??
+(?: \s+ \( (?P<room>.*?) \) )?       # lesson room
+(?: \s+ \( (?P<week>.*?) \) )?       # lesson week
+(?P<removed> \s+ - \s+ Dispensé)?    # is the lesson removed?
+# lesson tags
+(?: \s+ \[ (?P<tags> [^,]+? (?: \s+ , \s+ [^,]+? )* ) \] )?
+(?: \s+ (?P<color>\#.*?) )?          # lesson color
 $
 """
 ).match
@@ -78,6 +81,16 @@ class TimetableParser:
         # TODO add more settings: use the Settings class?
         self.settings.hours_width = int(self.config["hours_width"]) if "hours_width" in self.config else None
         self.settings.title_shadow = self.config.get("title_shadow", "").lower() == "true"
+        self.settings.colors = {}
+        for name, value in self.config.items():
+            if name.startswith("color."):
+                self.settings.colors[name.removeprefix("color.")] = value
+        self.settings.real_hours = {}
+        for name, value in self.config.items():
+            if name.startswith("real_hour."):
+                self.settings.real_hours[Hour(name.removeprefix("real_hour."))] = value
+        self.settings.render_real_hours = self.config.get("render_real_hours", "").lower() == "true"
+        self.settings.no_styles = self.config.get("no_styles", "").lower() == "true"
 
     def parse_empty_line_or_comment(self, _i: int, line: str) -> bool:
         """Skip empty lines and comments."""
@@ -109,7 +122,12 @@ class TimetableParser:
     def parse_config_option(self, i: int, line: str) -> bool:
         """If we are in a config section, try to parse the options."""
         if self.in_config:
-            name, _, value = line.partition(":")
+            # allow for colon and digits in the config option name
+            match = re.match(r"^(.*?(?!:\d+)):(.*?)$", line)
+            if not match:
+                raise ParseError(i, f"Invalid config option: {line!r}")
+            name = match.group(1)
+            value = match.group(2)
             if not value:
                 raise ParseError(i, f"Invalid config option: {line!r}")
             self.config[name.strip()] = value.strip()
@@ -137,7 +155,7 @@ class TimetableParser:
                 name=match["name"] or "",
                 teacher=match["teacher"] or "",
                 room=match["room"] or "",
-                color=match["color"] or self.config.get("color." + (match["name"] or "")),
+                color=match["color"],
                 week=week,
                 removed=bool(match["removed"]),
             )
@@ -149,7 +167,7 @@ class TimetableParser:
         """If there is --- and a day name was already specified, create the day object."""
         if is_hr(line):
             if self.current_day_name is not None and self.current_day is None:
-                self.current_day = Day(self.current_day_name)
+                self.current_day = Day(self.timetable, self.current_day_name)
                 self.timetable.days.append(self.current_day)
                 if self.lint and len(self.current_day_name) >= 3 and len(line) != len(self.current_day_name):
                     warnings.warn(
