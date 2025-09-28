@@ -26,7 +26,7 @@ def patch_output_method(pdf: FPDF, callback: Callable[[], None]):
 def get_path_to_font(font_name: str, font_style="Regular", pdf: FPDF | None = None):
     """Return the path to a font. If the font is not installed, download it from Google Fonts."""
     fonts_dir = Path("C:/Windows/Fonts") if sys.platform == "win32" else Path("/usr/share/fonts")
-    font_filename = f"{font_name}-{font_style}.ttf"
+    font_filename = f"{font_name.replace(' ', '')}-{font_style}.ttf"
     font_file = fonts_dir / font_filename
     if font_file.exists():
         return font_file

@@ -1,6 +1,8 @@
 from fpdf import FPDF
 from fpdf.pattern import LinearGradient, RadialGradient
 
+from fonts import add_font
+
 class CardPDF(FPDF):
     def add_card(self, x, y, w, h, number, color):
         gradient = RadialGradient(
@@ -67,7 +69,7 @@ def generate_pdf():
     pdf = CardPDF()
     pdf.set_auto_page_break(auto=False)
     pdf.set_margin(5)
-    pdf.add_font("PT Serif", fname="PTSerif-Regular.ttf")
+    add_font(pdf, "PT Serif", "Regular")
 
     # Define margins and card grid dimensions
     margin = 5  # mm
@@ -115,7 +117,7 @@ def generate_pdf():
             for col in range(grid_x):
                 if card_index >= len(cards):
                     break
-                x = margin + col * card_w
+                x = pdf.w - margin - (col + 1) * card_w
                 y = margin + row * card_h
                 pdf.add_card_back(x, y, card_w, card_h)
                 card_index += 1

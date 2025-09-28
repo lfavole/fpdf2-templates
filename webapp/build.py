@@ -67,4 +67,8 @@ try:
     (Path(__file__).parent / ".remote_url").write_text(url, "utf-8")
     print("OK")
 except sp.CalledProcessError as err:
-    print(f"Failed with return code {err.returncode}:\n{err.stdout}")
+    if "VERCEL_GIT_COMMIT_REF" in err.stdout:
+        # Ignore the error on Vercel (it doesn't have git)
+        print("skipped (VERCEL_GIT_COMMIT_REF detected)")
+    else:
+        print(f"Failed with return code {err.returncode}:\n{err.stdout}")
