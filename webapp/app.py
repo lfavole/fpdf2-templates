@@ -3,9 +3,9 @@ from pathlib import Path
 
 from flask import Flask, Response, render_template, request, session
 
-from timetable import PatchedFPDF, TimetableRenderer
+from timetable import PatchedFPDF
 from timetable.tt_parser import TimetableParser
-from timetable.utils import WebSettings, Settings
+from timetable.settings import WebSettings, Settings
 from .form_validation import render_form
 
 try:
@@ -66,7 +66,8 @@ def timetable():
     for file in files:
         result = TimetableParser(file.read())
         tt = result.timetable
-        TimetableRenderer(tt, Settings.merge(result.settings, settings)).render(pdf)
+        tt.move_lessons_if_needed()
+        tt.render(pdf, Settings.merge(result.settings, settings))
 
     return Response(bytes(pdf.output()), content_type="application/pdf")
 
@@ -77,7 +78,8 @@ def timetable_render():
     pdf = PatchedFPDF()
     result = TimetableParser(request.files["file"].stream.read().decode("utf-8"))
     tt = result.timetable
-    TimetableRenderer(tt, Settings.merge(result.settings)).render(pdf)
+    tt.move_lessons_if_needed()
+    tt.render(pdf, Settings.merge(result.settings))
     return Response(bytes(pdf.output()), content_type="application/pdf")
 
 
