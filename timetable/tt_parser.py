@@ -3,7 +3,12 @@ import re
 import warnings
 from pprint import pp
 
-from .utils import Day, Hour, Lesson, Settings, Timetable, Week
+from .day import Day
+from .hour import Hour
+from .lesson import Lesson
+from .settings import Settings
+from .timetable import Timetable
+from .utils import Week
 
 is_hr = re.compile(r"^---+$").match
 get_lesson = re.compile(
@@ -158,6 +163,7 @@ class TimetableParser:
                 color=match["color"],
                 week=week,
                 removed=bool(match["removed"]),
+                tags=[tag.strip() for tag in (match["tags"] or "").split(",") if tag.strip()],
             )
             self.current_day.lessons.append(lesson)
             return True
@@ -167,7 +173,7 @@ class TimetableParser:
         """If there is --- and a day name was already specified, create the day object."""
         if is_hr(line):
             if self.current_day_name is not None and self.current_day is None:
-                self.current_day = Day(self.timetable, self.current_day_name)
+                self.current_day = Day(self.current_day_name)
                 self.timetable.days.append(self.current_day)
                 if self.lint and len(self.current_day_name) >= 3 and len(line) != len(self.current_day_name):
                     warnings.warn(
